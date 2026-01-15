@@ -1,0 +1,89 @@
+version: '3.8'
+
+services:
+  # PostgreSQL Database
+  postgres:
+    image: postgres:15-alpine
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: ai_agent_eval
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Redis
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Go API Server
+  go-api:
+    build:
+      context: .
+      dockerfile: Dockerfile.go
+    ports:
+      - "8080:8080"
+    environment:
+      - DATABASE_URL=postgres://postgres:postgres@postgres:5432/ai_agent_eval?sslmode=disable
+      - REDIS_URL=redis://redis:6379/0
+      - EVALUATOR_SERVICE_URL=http://python-evaluator:8081
+      - GIN_MODE=release
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # Python Evaluator Service
+  python-evaluator:
+    build:
+      context: .
+      dockerfile: Dockerfile.python
+    ports:
+      - "8081:8081"
+    environment:
+      - DATABASE_URL=postgresql://postgres:postgres@postgres:5432/ai_agent_eval
+      - REDIS_URL=redis://redis:6379/0
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+      - LLM_PROVIDER=${LLM_PROVIDER:-openai}
+      - LLM_MODEL=${LLM_MODEL:-gpt-4-turbo-preview}
+    depends_on:
+      - postgres
+      - redis
+    restart: unless-stopped
+
+  # Streamlit Dashboard
+  dashboard:
+    build:
+      context: .
+      dockerfile: Dockerfile.dashboard
+    ports:
+      - "8501:8501"
+    environment:
+      - GO_API_URL=http://go-api:8080
+      - PYTHON_API_URL=http://python-evaluator:8081
+    depends_on:
+      - go-api
+      - python-evaluator
+    restart: unless-stopped
+
+volumes:
+  postgres_data:
+  redis_data:
